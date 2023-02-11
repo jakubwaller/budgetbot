@@ -4,8 +4,8 @@ from typing import Dict
 import requests
 
 
-def read_config() -> Dict:
-    with open("env.json") as file:
+def read_config(outdir: str) -> Dict:
+    with open(f"{outdir}/env.json") as file:
         config = json.load(file)
     return config
 

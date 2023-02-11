@@ -18,7 +18,7 @@ outdir = "budget_csvs"
 csv_file_name = f"{outdir}/budget.csv"
 df_columns = ["date", "amount", "category", "description", "chat_id"]
 
-config = read_config()
+config = read_config(outdir)
 developer_chat_id = config["developer_chat_id"]
 bot_token = config["bot_token"]
 
