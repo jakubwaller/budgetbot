@@ -1,0 +1,4 @@
+venv_budgetbot
+budgetbot/env.json
+.idea
+*.csv
