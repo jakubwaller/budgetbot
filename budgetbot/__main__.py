@@ -29,7 +29,7 @@ expense_categories = dict()
 expense_descriptions = dict()
 
 EXPENSE_DATE, EXPENSE_DATE_ANSWER, EXPENSE_CURRENCY, EXPENSE_AMOUNT, EXPENSE_CATEGORY, EXPENSE_DESCRIPTION = range(6)
-NUMBER_OF_DAYS_TO_SEND = 6
+NUMBER_OF_DAYS_TO_SEND = 9
 
 EURCLP = 855
 EURARS = 385
@@ -225,6 +225,7 @@ def send_all_expenses(update: Update, context: CallbackContext) -> int:
         message = message + f"{c.date},{c.amount},{c.category},{c.description}"
 
     context.bot.send_message(update.message.chat.id, message)
+    context.bot.send_message(update.message.chat.id, f"Sum: {current_chat['amount'].sum()}")
 
     return EXPENSE_DATE
 
@@ -233,6 +234,7 @@ def delete_last_entry(update: Update, context: CallbackContext) -> int:
     global df
 
     df = df.drop([df[df.chat_id == update.message.chat.id].iloc[-1].name])
+    df.to_csv(csv_file_name, header=True, index=False)
 
     context.bot.send_message(update.message.chat.id, "Last entry deleted.")
 
