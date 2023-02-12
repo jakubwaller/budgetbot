@@ -234,6 +234,8 @@ def delete_last_entry(update: Update, context: CallbackContext) -> int:
 
     df = df.drop([df[df.chat_id == update.message.chat.id].iloc[-1].name])
 
+    context.bot.send_message(update.message.chat.id, "Last entry deleted.")
+
     return EXPENSE_DATE
 
 
