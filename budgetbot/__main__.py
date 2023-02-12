@@ -32,6 +32,7 @@ EXPENSE_DATE, EXPENSE_DATE_ANSWER, EXPENSE_CURRENCY, EXPENSE_AMOUNT, EXPENSE_CAT
 NUMBER_OF_DAYS_TO_SEND = 6
 
 EURCLP = 855
+EURARS = 385
 
 try:
     df = pd.read_csv(csv_file_name)
@@ -84,7 +85,7 @@ def expense_date_answer(update: Update, context: CallbackContext) -> int:
     query.edit_message_text(text=f"Selected date: {received_expense_date}")
     expense_dates[query.message.chat.id] = received_expense_date
 
-    keyboard = [InlineKeyboardButton(d, callback_data=d) for d in ["EUR", "CLP"]]
+    keyboard = [InlineKeyboardButton(d, callback_data=d) for d in ["EUR", "CLP", "ARS"]]
 
     chunk_size = 3
     chunks = [keyboard[x : x + chunk_size] for x in range(0, len(keyboard), chunk_size)]
@@ -188,8 +189,10 @@ def send_info(chat_id, context: CallbackContext):
 
     if expense_currencies[chat_id] == "EUR":
         converted_amount = expense_amounts[chat_id]
-    else:
+    elif expense_currencies[chat_id] == "CLP":
         converted_amount = expense_amounts[chat_id] / EURCLP
+    else:
+        converted_amount = expense_amounts[chat_id] / EURARS
     df = pd.concat(
         [
             df,
