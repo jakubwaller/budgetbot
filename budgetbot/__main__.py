@@ -229,6 +229,14 @@ def send_all_expenses(update: Update, context: CallbackContext) -> int:
     return EXPENSE_DATE
 
 
+def delete_last_entry(update: Update, context: CallbackContext) -> int:
+    global df
+
+    df = df.drop([df[df.chat_id == update.message.chat.id].iloc[-1].name])
+
+    return EXPENSE_DATE
+
+
 def error_handler(update: object, context: CallbackContext) -> int:
     """Log the error and send a telegram message to notify the developer."""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
@@ -261,11 +269,13 @@ def main() -> None:
             CommandHandler("spend", expense_date),
             CommandHandler("start", start),
             CommandHandler("send_all_expenses", send_all_expenses),
+            CommandHandler("delete_last_entry", delete_last_entry),
         ],
         states={
             EXPENSE_DATE: [
                 CommandHandler("spend", expense_date),
                 CommandHandler("send_all_expenses", send_all_expenses),
+                CommandHandler("delete_last_entry", delete_last_entry),
             ],
             EXPENSE_DATE_ANSWER: [CallbackQueryHandler(expense_date_answer)],
             EXPENSE_CURRENCY: [CallbackQueryHandler(expense_currency)],
