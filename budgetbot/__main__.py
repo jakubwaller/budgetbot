@@ -15,7 +15,7 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 outdir = "budget_csvs"
-df_columns = ["date", "amount", "category", "description", "chat_id"]
+df_columns = ["date", "amount", "category", "description"]
 
 config = read_config(outdir)
 developer_chat_id = config["developer_chat_id"]
@@ -32,6 +32,7 @@ NUMBER_OF_DAYS_TO_SEND = 9
 
 EURCLP = 855
 EURARS = 385
+EURUSD = 1.07
 
 
 def start(update: Update, context: CallbackContext) -> int:
@@ -77,7 +78,7 @@ def expense_date_answer(update: Update, context: CallbackContext) -> int:
     query.edit_message_text(text=f"Selected date: {received_expense_date}")
     expense_dates[query.message.chat.id] = received_expense_date
 
-    keyboard = [InlineKeyboardButton(d, callback_data=d) for d in ["EUR", "CLP", "ARS"]]
+    keyboard = [InlineKeyboardButton(d, callback_data=d) for d in ["EUR", "CLP", "ARS", "USD"]]
 
     chunk_size = 3
     chunks = [keyboard[x : x + chunk_size] for x in range(0, len(keyboard), chunk_size)]
@@ -182,6 +183,8 @@ def send_info(chat_id, context: CallbackContext):
         converted_amount = expense_amounts[chat_id]
     elif expense_currencies[chat_id] == "CLP":
         converted_amount = expense_amounts[chat_id] / EURCLP
+    elif expense_currencies[chat_id] == "USD":
+        converted_amount = expense_amounts[chat_id] / EURUSD
     else:
         converted_amount = expense_amounts[chat_id] / EURARS
 
@@ -196,7 +199,6 @@ def send_info(chat_id, context: CallbackContext):
                         round(converted_amount, 2),
                         expense_categories[chat_id],
                         expense_descriptions[chat_id],
-                        chat_id,
                     ]
                 ],
                 columns=df_columns,
@@ -208,17 +210,16 @@ def send_info(chat_id, context: CallbackContext):
 
 def send_all_expenses(update: Update, context: CallbackContext) -> int:
     df = read_csv(outdir, update.message.chat.id, df_columns)
-    current_chat = df[df.chat_id == update.message.chat.id]
-    current_chat.sort_values(by=["date"], inplace=True)
+    df.sort_values(by=["date"], inplace=True)
 
     message = ""
-    for c in current_chat.itertuples():
+    for c in df.itertuples():
         if len(message) > 0:
             message = message + "\n"
         message = message + f"{c.date},{c.amount},{c.category},{c.description}"
 
     context.bot.send_message(update.message.chat.id, message)
-    context.bot.send_message(update.message.chat.id, f"Sum: {current_chat['amount'].sum()}")
+    context.bot.send_message(update.message.chat.id, f"Sum: {df['amount'].sum()}")
 
     return EXPENSE_DATE
 
@@ -227,7 +228,7 @@ def delete_last_entry(update: Update, context: CallbackContext) -> int:
     chat_id = update.message.chat.id
     df = read_csv(outdir, chat_id, df_columns)
 
-    df = df.drop([df[df.chat_id == chat_id].iloc[-1].name])
+    df = df.drop([df.iloc[-1].name])
     write_csv(df, outdir, chat_id)
 
     context.bot.send_message(update.message.chat.id, "Last entry deleted.")
