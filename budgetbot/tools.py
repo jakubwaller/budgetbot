@@ -1,7 +1,21 @@
 import json
+import os
 from typing import Dict
-
+import pandas as pd
 import requests
+
+
+def read_csv(outdir: str, chat_id, df_columns) -> pd.DataFrame:
+    try:
+        df = pd.read_csv(os.path.join(outdir, f"{chat_id}.csv"))
+    except Exception:
+        df = pd.DataFrame(columns=df_columns)
+
+    return df
+
+
+def write_csv(df, outdir: str, chat_id):
+    df.to_csv(os.path.join(outdir, f"{chat_id}.csv"), header=True, index=False)
 
 
 def read_config(outdir: str) -> Dict:

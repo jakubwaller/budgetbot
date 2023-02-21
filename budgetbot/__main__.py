@@ -9,13 +9,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ParseMo
 from telegram.ext import CallbackQueryHandler
 from telegram.ext import Updater, CallbackContext, CommandHandler, ConversationHandler, MessageHandler, Filters
 
-from tools import read_config
+from tools import read_config, read_csv, write_csv
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 outdir = "budget_csvs"
-csv_file_name = f"{outdir}/budget.csv"
 df_columns = ["date", "amount", "category", "description", "chat_id"]
 
 config = read_config(outdir)
@@ -33,13 +32,6 @@ NUMBER_OF_DAYS_TO_SEND = 9
 
 EURCLP = 855
 EURARS = 385
-
-try:
-    df = pd.read_csv(csv_file_name)
-except Exception:
-    df = pd.DataFrame(columns=df_columns)
-    if not os.path.exists(outdir):
-        os.mkdir(outdir)
 
 
 def start(update: Update, context: CallbackContext) -> int:
@@ -178,7 +170,6 @@ def send_info(chat_id, context: CallbackContext):
     global expense_currencies
     global expense_categories
     global expense_descriptions
-    global df
 
     context.bot.send_message(
         chat_id,
@@ -193,6 +184,8 @@ def send_info(chat_id, context: CallbackContext):
         converted_amount = expense_amounts[chat_id] / EURCLP
     else:
         converted_amount = expense_amounts[chat_id] / EURARS
+
+    df = read_csv(outdir, chat_id, df_columns)
     df = pd.concat(
         [
             df,
@@ -210,11 +203,11 @@ def send_info(chat_id, context: CallbackContext):
             ),
         ]
     )
-    df.to_csv(csv_file_name, header=True, index=False)
+    write_csv(df, outdir, chat_id)
 
 
 def send_all_expenses(update: Update, context: CallbackContext) -> int:
-    global df
+    df = read_csv(outdir, update.message.chat.id, df_columns)
     current_chat = df[df.chat_id == update.message.chat.id]
     current_chat.sort_values(by=["date"], inplace=True)
 
@@ -231,12 +224,22 @@ def send_all_expenses(update: Update, context: CallbackContext) -> int:
 
 
 def delete_last_entry(update: Update, context: CallbackContext) -> int:
-    global df
+    chat_id = update.message.chat.id
+    df = read_csv(outdir, chat_id, df_columns)
 
-    df = df.drop([df[df.chat_id == update.message.chat.id].iloc[-1].name])
-    df.to_csv(csv_file_name, header=True, index=False)
+    df = df.drop([df[df.chat_id == chat_id].iloc[-1].name])
+    write_csv(df, outdir, chat_id)
 
     context.bot.send_message(update.message.chat.id, "Last entry deleted.")
+
+    return EXPENSE_DATE
+
+
+def clear_all(update: Update, context: CallbackContext) -> int:
+    chat_id = update.message.chat.id
+    os.remove(os.path.join(outdir, f"{chat_id}.csv"))
+
+    context.bot.send_message(update.message.chat.id, "Removed all entries.")
 
     return EXPENSE_DATE
 
@@ -274,12 +277,14 @@ def main() -> None:
             CommandHandler("start", start),
             CommandHandler("send_all_expenses", send_all_expenses),
             CommandHandler("delete_last_entry", delete_last_entry),
+            CommandHandler("clear_all", clear_all),
         ],
         states={
             EXPENSE_DATE: [
                 CommandHandler("spend", expense_date),
                 CommandHandler("send_all_expenses", send_all_expenses),
                 CommandHandler("delete_last_entry", delete_last_entry),
+                CommandHandler("clear_all", clear_all),
             ],
             EXPENSE_DATE_ANSWER: [CallbackQueryHandler(expense_date_answer)],
             EXPENSE_CURRENCY: [CallbackQueryHandler(expense_currency)],
