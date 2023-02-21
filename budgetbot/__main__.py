@@ -218,8 +218,11 @@ def send_all_expenses(update: Update, context: CallbackContext) -> int:
             message = message + "\n"
         message = message + f"{c.date},{c.amount},{c.category},{c.description}"
 
-    context.bot.send_message(update.message.chat.id, message)
-    context.bot.send_message(update.message.chat.id, f"Sum: {df['amount'].sum()}")
+    if len(message) == 0:
+        context.bot.send_message(update.message.chat.id, "No expenses yet!")
+    else:
+        context.bot.send_message(update.message.chat.id, message)
+        context.bot.send_message(update.message.chat.id, f"Sum: {df['amount'].sum()}")
 
     return EXPENSE_DATE
 
