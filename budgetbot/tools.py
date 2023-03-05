@@ -24,6 +24,17 @@ def read_config(outdir: str) -> Dict:
     return config
 
 
+def read_currencies(outdir: str) -> Dict:
+    with open(f"{outdir}/currencies.json") as file:
+        currencies = json.load(file)
+    return currencies
+
+
+def save_currencies(currencies: Dict, outdir: str) -> None:
+    with open(f"{outdir}/currencies.json", "w") as outfile:
+        json.dump(currencies, outfile)
+
+
 def run_request(
     request_type: str,
     url: str,

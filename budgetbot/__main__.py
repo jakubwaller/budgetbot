@@ -9,7 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ParseMo
 from telegram.ext import CallbackQueryHandler
 from telegram.ext import Updater, CallbackContext, CommandHandler, ConversationHandler, MessageHandler, Filters
 
-from tools import read_config, read_csv, write_csv
+from tools import read_config, read_csv, write_csv, read_currencies, run_request, save_currencies
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,8 +18,10 @@ outdir = "budget_csvs"
 df_columns = ["date", "amount", "category", "description"]
 
 config = read_config(outdir)
+currencies = read_currencies(outdir)
 developer_chat_id = config["developer_chat_id"]
 bot_token = config["bot_token"]
+currency_exchange_api = config["currency_exchange_api"]
 
 expense_dates = dict()
 expense_amounts = dict()
@@ -27,12 +29,16 @@ expense_currencies = dict()
 expense_categories = dict()
 expense_descriptions = dict()
 
-EXPENSE_DATE, EXPENSE_DATE_ANSWER, EXPENSE_CURRENCY, EXPENSE_AMOUNT, EXPENSE_CATEGORY, EXPENSE_DESCRIPTION = range(6)
+(
+    EXPENSE_DATE,
+    EXPENSE_DATE_ANSWER,
+    EXPENSE_CURRENCY,
+    EXPENSE_AMOUNT,
+    EXPENSE_CATEGORY,
+    EXPENSE_DESCRIPTION,
+    ADD_CURRENCY,
+) = range(7)
 NUMBER_OF_DAYS_TO_SEND = 9
-
-EURCLP = 855
-EURARS = 385
-EURUSD = 1.07
 
 
 def start(update: Update, context: CallbackContext) -> int:
@@ -43,6 +49,31 @@ def start(update: Update, context: CallbackContext) -> int:
         "If you find issues or have any questions, please contact budgetbot@jakubwaller.eu\n"
         "If you want to support the bot, you can buy him a coffee here https://ko-fi.com/jakubwaller\n"
         "Feel free to also check out the code at: https://github.com/jakubwaller/budgetbot",
+    )
+
+    return EXPENSE_DATE
+
+
+def add_currency(update: Update, context: CallbackContext) -> int:
+    context.bot.send_message(update.message.chat.id, "Send me the currency three-letter name.")
+
+    return ADD_CURRENCY
+
+
+def add_currency_answer(update: Update, context: CallbackContext) -> int:
+    currency_name = update.message.text.strip()
+    url = f"https://api.apilayer.com/exchangerates_data/convert?to={currency_name}&from=EUR&amount=1"
+
+    headers = {"apikey": currency_exchange_api}
+
+    currency_exchange_rate = run_request("GET", url, request_headers=headers)["result"]
+
+    currencies[currency_name] = currency_exchange_rate
+    save_currencies(currencies, outdir)
+
+    context.bot.send_message(
+        update.message.chat.id,
+        f"Currency {currency_name} added with " f"exchange rate EUR/{currency_name}: {currency_exchange_rate}",
     )
 
     return EXPENSE_DATE
@@ -78,7 +109,7 @@ def expense_date_answer(update: Update, context: CallbackContext) -> int:
     query.edit_message_text(text=f"Selected date: {received_expense_date}")
     expense_dates[query.message.chat.id] = received_expense_date
 
-    keyboard = [InlineKeyboardButton(d, callback_data=d) for d in ["EUR", "CLP", "ARS", "USD"]]
+    keyboard = [InlineKeyboardButton(d, callback_data=d) for d in sorted(list(currencies.keys()))]
 
     chunk_size = 3
     chunks = [keyboard[x : x + chunk_size] for x in range(0, len(keyboard), chunk_size)]
@@ -179,14 +210,10 @@ def send_info(chat_id, context: CallbackContext):
         f"{expense_descriptions[chat_id]}.",
     )
 
-    if expense_currencies[chat_id] == "EUR":
-        converted_amount = expense_amounts[chat_id]
-    elif expense_currencies[chat_id] == "CLP":
-        converted_amount = expense_amounts[chat_id] / EURCLP
-    elif expense_currencies[chat_id] == "USD":
-        converted_amount = expense_amounts[chat_id] / EURUSD
-    else:
-        converted_amount = expense_amounts[chat_id] / EURARS
+    converted_amount = 0
+    for currency, exchange_rate in currencies.items():
+        if expense_currencies[chat_id] == currency:
+            converted_amount = expense_amounts[chat_id] / exchange_rate
 
     df = read_csv(outdir, chat_id, df_columns)
     df = pd.concat(
@@ -267,6 +294,8 @@ def error_handler(update: object, context: CallbackContext) -> int:
 def cancel(update: Update, context: CallbackContext) -> int:
     """Cancels and ends the conversation."""
 
+    context.bot.send_message(update.message.chat.id, "Current operation cancelled.")
+
     return EXPENSE_DATE
 
 
@@ -282,6 +311,7 @@ def main() -> None:
             CommandHandler("send_all_expenses", send_all_expenses),
             CommandHandler("delete_last_entry", delete_last_entry),
             CommandHandler("clear_all", clear_all),
+            CommandHandler("add_currency", add_currency),
         ],
         states={
             EXPENSE_DATE: [
@@ -289,12 +319,14 @@ def main() -> None:
                 CommandHandler("send_all_expenses", send_all_expenses),
                 CommandHandler("delete_last_entry", delete_last_entry),
                 CommandHandler("clear_all", clear_all),
+                CommandHandler("add_currency", add_currency),
             ],
             EXPENSE_DATE_ANSWER: [CallbackQueryHandler(expense_date_answer)],
             EXPENSE_CURRENCY: [CallbackQueryHandler(expense_currency)],
             EXPENSE_AMOUNT: [MessageHandler(Filters.text & ~Filters.command, expense_amount)],
             EXPENSE_CATEGORY: [CallbackQueryHandler(expense_category)],
             EXPENSE_DESCRIPTION: [MessageHandler(Filters.text & ~Filters.command, expense_description)],
+            ADD_CURRENCY: [MessageHandler(Filters.text & ~Filters.command, add_currency_answer)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )

@@ -1,4 +1,5 @@
 venv_budgetbot
-budgetbot/env.json
+budgetbot/budget_csvs/env.json
 .idea
 *.csv
+!currencies.json
