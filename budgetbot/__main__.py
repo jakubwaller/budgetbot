@@ -203,17 +203,18 @@ def send_info(chat_id, context: CallbackContext):
     global expense_categories
     global expense_descriptions
 
-    context.bot.send_message(
-        chat_id,
-        f"{expense_dates[chat_id]}: {expense_amounts[chat_id]} {expense_currencies[chat_id]}, "
-        f"{expense_categories[chat_id]}, "
-        f"{expense_descriptions[chat_id]}.",
-    )
-
     converted_amount = 0
     for currency, exchange_rate in currencies.items():
         if expense_currencies[chat_id] == currency:
-            converted_amount = expense_amounts[chat_id] / exchange_rate
+            converted_amount = round(expense_amounts[chat_id] / exchange_rate, 2)
+
+    context.bot.send_message(
+        chat_id,
+        f"{expense_dates[chat_id]}: {expense_amounts[chat_id]} {expense_currencies[chat_id]} "
+        f"({converted_amount} EUR), "
+        f"{expense_categories[chat_id]}, "
+        f"{expense_descriptions[chat_id]}.",
+    )
 
     df = read_csv(outdir, chat_id, df_columns)
     df = pd.concat(
@@ -223,7 +224,7 @@ def send_info(chat_id, context: CallbackContext):
                 [
                     [
                         expense_dates[chat_id],
-                        round(converted_amount, 2),
+                        converted_amount,
                         expense_categories[chat_id],
                         expense_descriptions[chat_id],
                     ]
@@ -237,7 +238,8 @@ def send_info(chat_id, context: CallbackContext):
 
 def send_all_expenses(update: Update, context: CallbackContext) -> int:
     df = read_csv(outdir, update.message.chat.id, df_columns)
-    df.sort_values(by=["date"], inplace=True)
+    df["sorting_date"] = pd.to_datetime(df["date"], format="%d.%m.%Y")
+    df.sort_values(by=["sorting_date"], inplace=True)
 
     message = ""
     for c in df.itertuples():
@@ -249,7 +251,11 @@ def send_all_expenses(update: Update, context: CallbackContext) -> int:
         context.bot.send_message(update.message.chat.id, "No expenses yet!")
     else:
         context.bot.send_message(update.message.chat.id, message)
-        context.bot.send_message(update.message.chat.id, f"Sum: {df['amount'].sum()}")
+        context.bot.send_message(update.message.chat.id, f"Sum: {round(df['amount'].sum(), 2)}")
+        context.bot.send_message(
+            update.message.chat.id,
+            f"Spent today: {round(df[df.date == datetime.date.today().strftime('%d.%m.%Y')]['amount'].sum(), 2)}",
+        )
 
     return EXPENSE_DATE
 
