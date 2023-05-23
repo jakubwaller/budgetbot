@@ -151,6 +151,7 @@ def expense_amount(update: Update, context: CallbackContext) -> int:
             "Drinking",
             "Busses etc",
             "Car Rental",
+            "Petrol",
             "LocalTransport",
             "Flights",
             "Hotels",
