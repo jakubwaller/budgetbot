@@ -291,7 +291,7 @@ def error_handler(update: object, context: CallbackContext) -> int:
 
     message = f"An exception was raised while handling an update\n" f"<pre>{html.escape(tb_string)}"
 
-    message = message[:500] + "</pre>"
+    message = message[-499:] + "</pre>"
 
     context.bot.send_message(chat_id=developer_chat_id, text=message, parse_mode=ParseMode.HTML)
 
