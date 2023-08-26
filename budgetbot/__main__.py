@@ -293,7 +293,10 @@ def error_handler(update: object, context: CallbackContext) -> int:
 
     message = message[-499:] + "</pre>"
 
-    context.bot.send_message(chat_id=developer_chat_id, text=message, parse_mode=ParseMode.HTML)
+    try:
+        context.bot.send_message(chat_id=developer_chat_id, text=message, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        print(e)
 
     return EXPENSE_DATE
 
