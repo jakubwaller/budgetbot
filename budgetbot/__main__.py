@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import html
 import logging
@@ -5,13 +6,23 @@ import os
 import traceback
 
 import pandas as pd
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, ParseMode
-from telegram.ext import CallbackQueryHandler
-from telegram.ext import Updater, CallbackContext, CommandHandler, ConversationHandler, MessageHandler, Filters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
 from tools import read_config, read_csv, write_csv, read_currencies, run_request, save_currencies
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# httpx logs full request URLs at INFO, which would put the bot token in the logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 outdir = "budget_csvs"
@@ -41,37 +52,50 @@ expense_descriptions = dict()
 NUMBER_OF_DAYS_TO_SEND = 9
 
 
-def start(update: Update, context: CallbackContext) -> int:
-    context.bot.send_message(
+async def ping_developer(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """Usage ping. Best effort: a failed ping must not leave a conversation in the wrong state."""
+    try:
+        await context.bot.send_message(developer_chat_id, text)
+    except Exception:
+        logger.warning("developer ping failed", exc_info=True)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await context.bot.send_message(
         update.message.chat.id,
         "Hi there! I’m Budget Bot.\n"
         "Send me your expenses and I'll keep track of them for you.\n"
+        "Your entries (date, amount, category, description) are stored in a CSV file on the bot's "
+        "server in the EU, keyed by this chat's ID — /send_all_expenses shows everything stored, "
+        "/clear_all removes them from the bot; server backups roll off within 14 days.\n"
+        "When you /start or save an expense, the developer gets a ping with this chat's ID, no contents.\n"
         "If you find issues or have any questions, please contact budgetbot@jakubwaller.eu\n"
         "If you want to support the bot, you can buy him a coffee here https://ko-fi.com/jakubwaller\n"
         "Feel free to also check out the code at: https://github.com/jakubwaller/budgetbot",
     )
+    await ping_developer(context, f"budgetbot: /start from chat {update.message.chat.id}")
 
     return EXPENSE_DATE
 
 
-def add_currency(update: Update, context: CallbackContext) -> int:
-    context.bot.send_message(update.message.chat.id, "Send me the currency three-letter name.")
+async def add_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await context.bot.send_message(update.message.chat.id, "Send me the currency three-letter name.")
 
     return ADD_CURRENCY
 
 
-def add_currency_answer(update: Update, context: CallbackContext) -> int:
+async def add_currency_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     currency_name = update.message.text.strip()
     url = f"https://api.apilayer.com/exchangerates_data/convert?to={currency_name}&from=EUR&amount=1"
 
     headers = {"apikey": currency_exchange_api}
 
-    currency_exchange_rate = run_request("GET", url, request_headers=headers)["result"]
+    currency_exchange_rate = (await asyncio.to_thread(run_request, "GET", url, request_headers=headers))["result"]
 
     currencies[currency_name] = currency_exchange_rate
     save_currencies(currencies, outdir)
 
-    context.bot.send_message(
+    await context.bot.send_message(
         update.message.chat.id,
         f"Currency {currency_name} added with " f"exchange rate EUR/{currency_name}: {currency_exchange_rate}",
     )
@@ -79,7 +103,7 @@ def add_currency_answer(update: Update, context: CallbackContext) -> int:
     return EXPENSE_DATE
 
 
-def expense_date(update: Update, context: CallbackContext) -> int:
+async def expense_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Asks for a date."""
     dates = [
         (datetime.date.today() - datetime.timedelta(days=x)).strftime("%d.%m.%Y")
@@ -92,21 +116,21 @@ def expense_date(update: Update, context: CallbackContext) -> int:
     chunks = [keyboard[x : x + chunk_size] for x in range(0, len(keyboard), chunk_size)]
 
     reply_markup = InlineKeyboardMarkup(chunks)
-    update.message.reply_text("Select date:", reply_markup=reply_markup)
+    await update.message.reply_text("Select date:", reply_markup=reply_markup)
 
     return EXPENSE_DATE_ANSWER
 
 
-def expense_date_answer(update: Update, context: CallbackContext) -> int:
+async def expense_date_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     global expense_dates
     query = update.callback_query
 
     # CallbackQueries need to be answered, even if no notification to the user is needed
     # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
-    query.answer()
+    await query.answer()
 
     received_expense_date = query.data
-    query.edit_message_text(text=f"Selected date: {received_expense_date}")
+    await query.edit_message_text(text=f"Selected date: {received_expense_date}")
     expense_dates[query.message.chat.id] = received_expense_date
 
     keyboard = [InlineKeyboardButton(d, callback_data=d) for d in sorted(list(currencies.keys()))]
@@ -116,29 +140,29 @@ def expense_date_answer(update: Update, context: CallbackContext) -> int:
 
     reply_markup = InlineKeyboardMarkup(chunks)
 
-    context.bot.send_message(query.message.chat.id, "What currency?", reply_markup=reply_markup)
+    await context.bot.send_message(query.message.chat.id, "What currency?", reply_markup=reply_markup)
 
     return EXPENSE_CURRENCY
 
 
-def expense_currency(update: Update, context: CallbackContext) -> int:
+async def expense_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     global expense_currencies
     query = update.callback_query
 
     # CallbackQueries need to be answered, even if no notification to the user is needed
     # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
-    query.answer()
+    await query.answer()
 
     received_expense_currency = query.data
-    query.edit_message_text(text=f"Selected currency: {received_expense_currency}")
+    await query.edit_message_text(text=f"Selected currency: {received_expense_currency}")
     expense_currencies[query.message.chat.id] = received_expense_currency
 
-    context.bot.send_message(query.message.chat.id, "How much?")
+    await context.bot.send_message(query.message.chat.id, "How much?")
 
     return EXPENSE_AMOUNT
 
 
-def expense_amount(update: Update, context: CallbackContext) -> int:
+async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     global expense_amounts
     amount = float(update.message.text.strip())
     expense_amounts[update.message.chat.id] = amount
@@ -165,39 +189,39 @@ def expense_amount(update: Update, context: CallbackContext) -> int:
 
     reply_markup = InlineKeyboardMarkup(chunks)
 
-    context.bot.send_message(update.message.chat.id, "What category?", reply_markup=reply_markup)
+    await context.bot.send_message(update.message.chat.id, "What category?", reply_markup=reply_markup)
 
     return EXPENSE_CATEGORY
 
 
-def expense_category(update: Update, context: CallbackContext) -> int:
+async def expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     global expense_categories
     query = update.callback_query
 
     # CallbackQueries need to be answered, even if no notification to the user is needed
     # Some clients may have trouble otherwise. See https://core.telegram.org/bots/api#callbackquery
-    query.answer()
+    await query.answer()
 
     received_expense_category = query.data
-    query.edit_message_text(text=f"Selected category: {received_expense_category}")
+    await query.edit_message_text(text=f"Selected category: {received_expense_category}")
     expense_categories[query.message.chat.id] = received_expense_category
 
-    context.bot.send_message(query.message.chat.id, "Send a short description:")
+    await context.bot.send_message(query.message.chat.id, "Send a short description:")
 
     return EXPENSE_DESCRIPTION
 
 
-def expense_description(update: Update, context: CallbackContext) -> int:
+async def expense_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     global expense_descriptions
     description = update.message.text.strip()
     expense_descriptions[update.message.chat.id] = description
 
-    send_info(update.message.chat.id, context)
+    await send_info(update.message.chat.id, context)
 
     return EXPENSE_DATE
 
 
-def send_info(chat_id, context: CallbackContext):
+async def send_info(chat_id, context: ContextTypes.DEFAULT_TYPE):
     global expense_amounts
     global expense_dates
     global expense_currencies
@@ -209,7 +233,7 @@ def send_info(chat_id, context: CallbackContext):
         if expense_currencies[chat_id] == currency:
             converted_amount = round(expense_amounts[chat_id] / exchange_rate, 2)
 
-    context.bot.send_message(
+    await context.bot.send_message(
         chat_id,
         f"{expense_dates[chat_id]}: {expense_amounts[chat_id]} {expense_currencies[chat_id]} "
         f"({converted_amount} EUR), "
@@ -236,8 +260,11 @@ def send_info(chat_id, context: CallbackContext):
     )
     write_csv(df, outdir, chat_id)
 
+    # usage ping only — no expense contents in the developer channel
+    await ping_developer(context, f"budgetbot: expense saved by chat {chat_id}")
 
-def send_all_expenses(update: Update, context: CallbackContext) -> int:
+
+async def send_all_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     df = read_csv(outdir, update.message.chat.id, df_columns)
     df["sorting_date"] = pd.to_datetime(df["date"], format="%d.%m.%Y")
     df.sort_values(by=["sorting_date"], inplace=True)
@@ -249,11 +276,11 @@ def send_all_expenses(update: Update, context: CallbackContext) -> int:
         message = message + f"{c.date},{c.amount},{c.category},{c.description}"
 
     if len(message) == 0:
-        context.bot.send_message(update.message.chat.id, "No expenses yet!")
+        await context.bot.send_message(update.message.chat.id, "No expenses yet!")
     else:
-        context.bot.send_message(update.message.chat.id, message)
-        context.bot.send_message(update.message.chat.id, f"Sum: {round(df['amount'].sum(), 2)}")
-        context.bot.send_message(
+        await context.bot.send_message(update.message.chat.id, message)
+        await context.bot.send_message(update.message.chat.id, f"Sum: {round(df['amount'].sum(), 2)}")
+        await context.bot.send_message(
             update.message.chat.id,
             f"Spent today: {round(df[df.date == datetime.date.today().strftime('%d.%m.%Y')]['amount'].sum(), 2)}",
         )
@@ -261,28 +288,28 @@ def send_all_expenses(update: Update, context: CallbackContext) -> int:
     return EXPENSE_DATE
 
 
-def delete_last_entry(update: Update, context: CallbackContext) -> int:
+async def delete_last_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.message.chat.id
     df = read_csv(outdir, chat_id, df_columns)
 
     df = df.drop([df.iloc[-1].name])
     write_csv(df, outdir, chat_id)
 
-    context.bot.send_message(update.message.chat.id, "Last entry deleted.")
+    await context.bot.send_message(update.message.chat.id, "Last entry deleted.")
 
     return EXPENSE_DATE
 
 
-def clear_all(update: Update, context: CallbackContext) -> int:
+async def clear_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.message.chat.id
     os.remove(os.path.join(outdir, f"{chat_id}.csv"))
 
-    context.bot.send_message(update.message.chat.id, "Removed all entries.")
+    await context.bot.send_message(update.message.chat.id, "Removed all entries.")
 
     return EXPENSE_DATE
 
 
-def error_handler(update: object, context: CallbackContext) -> int:
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Log the error and send a telegram message to notify the developer."""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
@@ -294,25 +321,24 @@ def error_handler(update: object, context: CallbackContext) -> int:
     message = message[-499:] + "</pre>"
 
     try:
-        context.bot.send_message(chat_id=developer_chat_id, text=message, parse_mode=ParseMode.HTML)
+        await context.bot.send_message(chat_id=developer_chat_id, text=message, parse_mode=ParseMode.HTML)
     except Exception as e:
         print(e)
 
     return EXPENSE_DATE
 
 
-def cancel(update: Update, context: CallbackContext) -> int:
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels and ends the conversation."""
 
-    context.bot.send_message(update.message.chat.id, "Current operation cancelled.")
+    await context.bot.send_message(update.message.chat.id, "Current operation cancelled.")
 
     return EXPENSE_DATE
 
 
 def main() -> None:
     """Setup and run the bot."""
-    # Create the Updater and pass it your bot's token.
-    updater = Updater(bot_token)
+    application = Application.builder().token(bot_token).build()
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -333,24 +359,20 @@ def main() -> None:
             ],
             EXPENSE_DATE_ANSWER: [CallbackQueryHandler(expense_date_answer)],
             EXPENSE_CURRENCY: [CallbackQueryHandler(expense_currency)],
-            EXPENSE_AMOUNT: [MessageHandler(Filters.text & ~Filters.command, expense_amount)],
+            EXPENSE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_amount)],
             EXPENSE_CATEGORY: [CallbackQueryHandler(expense_category)],
-            EXPENSE_DESCRIPTION: [MessageHandler(Filters.text & ~Filters.command, expense_description)],
-            ADD_CURRENCY: [MessageHandler(Filters.text & ~Filters.command, add_currency_answer)],
+            EXPENSE_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_description)],
+            ADD_CURRENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_currency_answer)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    updater.dispatcher.add_handler(conv_handler)
+    application.add_handler(conv_handler)
 
-    updater.dispatcher.add_error_handler(error_handler)
+    application.add_error_handler(error_handler)
 
-    # Start the Bot
-    updater.start_polling()
-
-    # Run the bot until the user presses Ctrl-C or the process receives SIGINT,
-    # SIGTERM or SIGABRT
-    updater.idle()
+    # Run the bot until the process receives SIGINT, SIGTERM or SIGABRT
+    application.run_polling(poll_interval=1)
 
 
 if __name__ == "__main__":

@@ -3,3 +3,4 @@ env.json
 .idea
 *.csv
 !currencies.json
+__pycache__/
