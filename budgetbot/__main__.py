@@ -52,6 +52,14 @@ expense_descriptions = dict()
 NUMBER_OF_DAYS_TO_SEND = 9
 
 
+async def ping_developer(context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """Usage ping. Best effort: a failed ping must not leave a conversation in the wrong state."""
+    try:
+        await context.bot.send_message(developer_chat_id, text)
+    except Exception:
+        logger.warning("developer ping failed", exc_info=True)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await context.bot.send_message(
         update.message.chat.id,
@@ -59,12 +67,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Send me your expenses and I'll keep track of them for you.\n"
         "Your entries (date, amount, category, description) are stored in a CSV file on the bot's "
         "server in the EU, keyed by this chat's ID — /send_all_expenses shows everything stored, "
-        "/clear_all deletes it all.\n"
+        "/clear_all removes them from the bot; server backups roll off within 14 days.\n"
+        "When you /start or save an expense, the developer gets a ping with this chat's ID, no contents.\n"
         "If you find issues or have any questions, please contact budgetbot@jakubwaller.eu\n"
         "If you want to support the bot, you can buy him a coffee here https://ko-fi.com/jakubwaller\n"
         "Feel free to also check out the code at: https://github.com/jakubwaller/budgetbot",
     )
-    await context.bot.send_message(developer_chat_id, f"budgetbot: /start from chat {update.message.chat.id}")
+    await ping_developer(context, f"budgetbot: /start from chat {update.message.chat.id}")
 
     return EXPENSE_DATE
 
@@ -252,7 +261,7 @@ async def send_info(chat_id, context: ContextTypes.DEFAULT_TYPE):
     write_csv(df, outdir, chat_id)
 
     # usage ping only — no expense contents in the developer channel
-    await context.bot.send_message(developer_chat_id, f"budgetbot: expense saved by chat {chat_id}")
+    await ping_developer(context, f"budgetbot: expense saved by chat {chat_id}")
 
 
 async def send_all_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

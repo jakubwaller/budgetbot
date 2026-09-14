@@ -15,7 +15,7 @@ setup(
     long_description_content_type="text/markdown",
     package_dir={"": "."},
     packages=find_packages(where=".", exclude=("tests", "docs")),
-    python_requires=">=3.7, <4",
+    python_requires=">=3.10, <4",
     # dependencies
     install_requires=requirements,
 )
