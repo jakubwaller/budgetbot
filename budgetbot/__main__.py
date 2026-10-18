@@ -4,6 +4,7 @@ import html
 import logging
 import math
 import os
+import re
 import traceback
 
 import pandas as pd
@@ -101,9 +102,10 @@ async def current_rate(currency_name: str) -> float:
             rate = await fetch_rate(currency_name)
             if rate:
                 currencies[currency_name] = rate
-            rates_refreshed_on[currency_name] = today
         except Exception:
             logger.warning("rate refresh failed for %s, using the stored rate", currency_name, exc_info=True)
+        # Also after a failure, so a down API costs one slow expense a day, not every one
+        rates_refreshed_on[currency_name] = today
     return currencies[currency_name]
 
 
@@ -185,8 +187,12 @@ async def expense_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     global expense_amounts
+    text = update.message.text.strip()
+    # "12,50" is a decimal comma; "1,000" or "1.000,50" are ambiguous, so they are asked again
+    if re.fullmatch(r"-?\d+,\d{1,2}", text):
+        text = text.replace(",", ".")
     try:
-        amount = float(update.message.text.strip().replace(",", "."))
+        amount = float(text)
     except ValueError:
         amount = math.nan
     if not math.isfinite(amount):
