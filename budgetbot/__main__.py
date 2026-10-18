@@ -2,7 +2,9 @@ import asyncio
 import datetime
 import html
 import logging
+import math
 import os
+import re
 import traceback
 
 import pandas as pd
@@ -39,6 +41,8 @@ expense_amounts = dict()
 expense_currencies = dict()
 expense_categories = dict()
 expense_descriptions = dict()
+# Rates in currencies.json were fetched when each currency was added; refreshed in memory once a day
+rates_refreshed_on = dict()
 
 (
     EXPENSE_DATE,
@@ -84,15 +88,34 @@ async def add_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ADD_CURRENCY
 
 
+async def fetch_rate(currency_name: str) -> float:
+    url = f"https://api.apilayer.com/exchangerates_data/convert?to={currency_name}&from=EUR&amount=1"
+    headers = {"apikey": currency_exchange_api}
+    return (await asyncio.to_thread(run_request, "GET", url, request_headers=headers))["result"]
+
+
+async def current_rate(currency_name: str) -> float:
+    """The stored rate, refreshed at most once a day; the stored one stays if the refresh fails."""
+    today = datetime.date.today()
+    if currency_name != "EUR" and rates_refreshed_on.get(currency_name) != today:
+        try:
+            rate = await fetch_rate(currency_name)
+            if rate:
+                currencies[currency_name] = rate
+        except Exception:
+            logger.warning("rate refresh failed for %s, using the stored rate", currency_name, exc_info=True)
+        # Also after a failure, so a down API costs one slow expense a day, not every one
+        rates_refreshed_on[currency_name] = today
+    return currencies[currency_name]
+
+
 async def add_currency_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     currency_name = update.message.text.strip()
-    url = f"https://api.apilayer.com/exchangerates_data/convert?to={currency_name}&from=EUR&amount=1"
 
-    headers = {"apikey": currency_exchange_api}
-
-    currency_exchange_rate = (await asyncio.to_thread(run_request, "GET", url, request_headers=headers))["result"]
+    currency_exchange_rate = await fetch_rate(currency_name)
 
     currencies[currency_name] = currency_exchange_rate
+    rates_refreshed_on[currency_name] = datetime.date.today()
     save_currencies(currencies, outdir)
 
     await context.bot.send_message(
@@ -164,7 +187,17 @@ async def expense_currency(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     global expense_amounts
-    amount = float(update.message.text.strip())
+    text = update.message.text.strip()
+    # "12,50" is a decimal comma; "1,000" or "1.000,50" are ambiguous, so they are asked again
+    if re.fullmatch(r"-?\d+,\d{1,2}", text):
+        text = text.replace(",", ".")
+    try:
+        amount = float(text)
+    except ValueError:
+        amount = math.nan
+    if not math.isfinite(amount):
+        await context.bot.send_message(update.message.chat.id, "Please send a number, e.g. 12.50")
+        return EXPENSE_AMOUNT
     expense_amounts[update.message.chat.id] = amount
 
     keyboard = [
@@ -228,10 +261,7 @@ async def send_info(chat_id, context: ContextTypes.DEFAULT_TYPE):
     global expense_categories
     global expense_descriptions
 
-    converted_amount = 0
-    for currency, exchange_rate in currencies.items():
-        if expense_currencies[chat_id] == currency:
-            converted_amount = round(expense_amounts[chat_id] / exchange_rate, 2)
+    converted_amount = round(expense_amounts[chat_id] / await current_rate(expense_currencies[chat_id]), 2)
 
     await context.bot.send_message(
         chat_id,
@@ -269,15 +299,18 @@ async def send_all_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     df["sorting_date"] = pd.to_datetime(df["date"], format="%d.%m.%Y")
     df.sort_values(by=["sorting_date"], inplace=True)
 
-    message = ""
-    for c in df.itertuples():
-        if len(message) > 0:
-            message = message + "\n"
-        message = message + f"{c.date},{c.amount},{c.category},{c.description}"
+    lines = [f"{c.date},{c.amount},{c.category},{c.description}" for c in df.itertuples()]
 
-    if len(message) == 0:
+    if not lines:
         await context.bot.send_message(update.message.chat.id, "No expenses yet!")
     else:
+        # Telegram caps a message at 4096 characters, so long lists go out in parts
+        message = ""
+        for line in lines:
+            if message and len(message) + 1 + len(line) > 4000:
+                await context.bot.send_message(update.message.chat.id, message)
+                message = ""
+            message = f"{message}\n{line}" if message else line[:4000]
         await context.bot.send_message(update.message.chat.id, message)
         await context.bot.send_message(update.message.chat.id, f"Sum: {round(df['amount'].sum(), 2)}")
         await context.bot.send_message(
@@ -291,6 +324,9 @@ async def send_all_expenses(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def delete_last_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.message.chat.id
     df = read_csv(outdir, chat_id, df_columns)
+    if df.empty:
+        await context.bot.send_message(chat_id, "No expenses yet!")
+        return EXPENSE_DATE
 
     df = df.drop([df.iloc[-1].name])
     write_csv(df, outdir, chat_id)
@@ -302,7 +338,10 @@ async def delete_last_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def clear_all(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.message.chat.id
-    os.remove(os.path.join(outdir, f"{chat_id}.csv"))
+    try:
+        os.remove(os.path.join(outdir, f"{chat_id}.csv"))
+    except FileNotFoundError:
+        pass
 
     await context.bot.send_message(update.message.chat.id, "Removed all entries.")
 
